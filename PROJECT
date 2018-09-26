@@ -1,0 +1,3 @@
+version: "1"
+domain: amazonaws.com
+repo: github.com/ihoegen/iam-role-manager

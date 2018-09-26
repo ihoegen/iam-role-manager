@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    controller-tools.k8s.io: "1.0"
+  name: system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iam-role-manager-service
+  namespace: system
+  labels:
+    control-plane: iam-role-manager
+    controller-tools.k8s.io: "1.0"
+spec:
+  selector:
+    control-plane: iam-role-manager
+    controller-tools.k8s.io: "1.0"
+  ports:
+  - port: 443
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: iam-role-manager
+  namespace: system
+  labels:
+    control-plane: iam-role-manager
+    controller-tools.k8s.io: "1.0"
+spec:
+  selector:
+    matchLabels:
+      control-plane: iam-role-manager
+      controller-tools.k8s.io: "1.0"
+  serviceName: iam-role-manager-service
+  template:
+    metadata:
+      labels:
+        control-plane: iam-role-manager
+        controller-tools.k8s.io: "1.0"
+    spec:
+      containers:
+      - command:
+        - /root/manager
+        image: ihoegen/iam-role-manager:latest
+        imagePullPolicy: Always
+        name: iam-role-manager
+        resources:
+          limits:
+            cpu: 100m
+            memory: 30Mi
+          requests:
+            cpu: 100m
+            memory: 20Mi
+      terminationGracePeriodSeconds: 10

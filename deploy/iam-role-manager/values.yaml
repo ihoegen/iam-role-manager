@@ -1,0 +1,15 @@
+replicaCount: 1
+
+image:
+  repository: ihoegen/iam-role-manager
+  tag: latest
+  pullPolicy: Always
+
+rbac:
+  create: true
+
+service:
+  port: 443
+
+# If using kube2iam or kiam
+iamRole: arn:aws:iam::161511530624:role/iam-role-manager

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ template "iam-role-manager.fullname" . }}
+  labels:
+    control-plane: {{ template "iam-role-manager.fullname" . }}
+    controller-tools.k8s.io: "1.0"
+spec:
+  selector:
+    matchLabels:
+      control-plane: {{ template "iam-role-manager.fullname" . }}
+      controller-tools.k8s.io: "1.0"
+  serviceName: {{ template "iam-role-manager.fullname" . }}
+  template:
+    metadata:
+      labels:
+        control-plane: {{ template "iam-role-manager.fullname" . }}
+        controller-tools.k8s.io: "1.0"
+      {{- if .Values.iamRole}}
+      annotations: 
+        iam.amazonaws.com/role: {{ .Values.iamRole }}
+      {{- end}}
+    spec:
+    {{- if .Values.rbac.create }}
+      serviceAccountName: {{ template "iam-role-manager.fullname" . }}
+    {{- end }}
+      containers:
+      - command:
+        - /root/manager
+        image: '{{ .Values.image.repository }}:{{ .Values.image.tag }}'
+        imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+        name: {{ template "iam-role-manager.fullname" . }}
+        resources:
+          limits:
+            cpu: 100m
+            memory: 30Mi
+          requests:
+            cpu: 100m
+            memory: 20Mi
+      terminationGracePeriodSeconds: 10
