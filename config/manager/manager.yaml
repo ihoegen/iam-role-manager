@@ -43,7 +43,7 @@ spec:
       containers:
       - command:
         - /root/manager
-        image: ihoegen/iam-role-manager:latest
+        image: ihoegen/iam-role-manager:1.0.0
         imagePullPolicy: Always
         name: iam-role-manager
         resources:

@@ -10,10 +10,10 @@ spec:
     {
         "Version": "2012-10-17",
         "Statement": [
-            {i
+            {
                 "Effect": "Allow",
                 "Principal": {
-                    "AWS": "ec2.amazonaws.com"
+                    "Service": "ec2.amazonaws.com"
                 },
                 "Action": "sts:AssumeRole"
             }
@@ -32,6 +32,8 @@ spec:
           }
         ]
       }
-  policies: []
+  policies:
+  - arn:aws:iam::123456789:policy/SomePolicy
+  - AnotherPolicy
   path: "/"
   maxSessionDuration: 3600

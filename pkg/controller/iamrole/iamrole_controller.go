@@ -83,8 +83,8 @@ func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Resul
 	iamRole := &iamv1beta1.IAMRole{}
 	iamClient := iam.New(session.New())
 	err := r.Get(context.TODO(), request.NamespacedName, iamRole)
-	// IAM role deleted
 	if err != nil {
+		// IAM role deleted
 		if errors.IsNotFound(err) {
 			iamRole.ObjectMeta.SetName(request.Name)
 			err = DeleteIAMRole(iamClient, iamRole)
@@ -100,9 +100,8 @@ func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Resul
 			eventRecorder.Event(iamRole, "Warning", "ErrorSyncingIAMRole", err.Error())
 			return reconcile.Result{}, err
 		}
-		err = r.Update(context.TODO(), iamRole)
 		eventRecorder.Event(iamRole, "Normal", "IAMRoleUpdated", "Successfully updated IAM role")
-		return reconcile.Result{}, err
+		return reconcile.Result{}, nil
 	}
 	// IAM Role doesn't exist in AWS; creating
 	err = CreateIAMRole(iamClient, iamRole)

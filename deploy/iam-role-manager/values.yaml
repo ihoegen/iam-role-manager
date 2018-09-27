@@ -12,4 +12,4 @@ service:
   port: 443
 
 # If using kube2iam or kiam
-iamRole: arn:aws:iam::161511530624:role/iam-role-manager
+#iamRole: 

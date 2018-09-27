@@ -38,9 +38,8 @@ type InlinePolicySpec struct {
 
 // IAMRoleStatus defines the observed state of IAMRole
 type IAMRoleStatus struct {
-	LastUpdate string `json:"RoleCreationTime,omitempty"`
-	ARN        string `json:"arn,omitempty"`
-	RoleID     string `json:"roleId,omitempty"`
+	ARN    string `json:"arn,omitempty"`
+	RoleID string `json:"roleId,omitempty"`
 }
 
 // +genclient
