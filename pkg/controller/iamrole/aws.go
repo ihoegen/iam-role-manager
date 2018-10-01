@@ -11,98 +11,153 @@ import (
 	iamv1beta1 "github.com/ihoegen/iam-role-manager/pkg/apis/iam/v1beta1"
 )
 
+// IAMClient provides an interface with interacting with AWS
+type IAMClient struct {
+	Client *iam.IAM
+	Role   *iamv1beta1.IAMRole
+}
+
+// NewIAMClient returns a new client for interacting with AWS IAM
+func NewIAMClient(client *iam.IAM, role *iamv1beta1.IAMRole) IAMClient {
+	return IAMClient{
+		Client: client,
+		Role:   role,
+	}
+}
+
 //CreateIAMRole creates an IAM role in AWS, based on a spec
-func CreateIAMRole(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
-	roleName := iamRole.ObjectMeta.GetName()
-	createRoleOutput, err := iamClient.CreateRole(&iam.CreateRoleInput{
-		AssumeRolePolicyDocument: &iamRole.Spec.TrustRelationship,
-		Description:              &iamRole.Spec.Description,
-		Path:                     &iamRole.Spec.Path,
+func (i *IAMClient) CreateIAMRole() error {
+	roleName := i.Role.ObjectMeta.GetName()
+	createRoleOutput, err := i.Client.CreateRole(&iam.CreateRoleInput{
+		AssumeRolePolicyDocument: &i.Role.Spec.TrustRelationship,
+		Description:              &i.Role.Spec.Description,
+		Path:                     &i.Role.Spec.Path,
 		RoleName:                 &roleName,
-		MaxSessionDuration:       &iamRole.Spec.MaxSessionDuration,
+		MaxSessionDuration:       &i.Role.Spec.MaxSessionDuration,
 	})
 	if err != nil {
 		return err
 	}
-	iamRole.Status.ARN = *createRoleOutput.Role.Arn
-	iamRole.Status.RoleID = *createRoleOutput.Role.RoleId
-	err = createInlinePolicies(iamClient, iamRole)
+	i.Role.Status.ARN = *createRoleOutput.Role.Arn
+	i.Role.Status.RoleID = *createRoleOutput.Role.RoleId
+	err = i.createInlinePolicies()
 	if err != nil {
 		return err
 	}
-	err = attachPolicies(iamClient, iamRole)
+	err = i.attachPolicies()
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-//DeleteIAMRole deletes an IAM role with a matching name
-func DeleteIAMRole(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
-	var errors []error
-	roleName := iamRole.ObjectMeta.GetName()
-	err := removeInlinePolicies(iamClient, iamRole)
-	attachedPolicies, err := iamClient.ListAttachedRolePolicies(&iam.ListAttachedRolePoliciesInput{
-		RoleName: &roleName,
-	})
+//DeleteIAMRole deletes an IAM role
+func (i *IAMClient) DeleteIAMRole() error {
+	roleName := i.Role.ObjectMeta.GetName()
+	currentPolicies, err := i.listInlinePolicies(roleName)
 	if err != nil {
 		return err
 	}
-	for _, policy := range attachedPolicies.AttachedPolicies {
-		_, err = iamClient.DetachRolePolicy(&iam.DetachRolePolicyInput{
+	for _, policy := range currentPolicies {
+		_, err = i.Client.DeleteRolePolicy(&iam.DeleteRolePolicyInput{
+			PolicyName: &policy,
+			RoleName:   &roleName,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	attachedPolicies, err := i.listAttachedPolicies(roleName)
+	if err != nil {
+		return err
+	}
+	for _, policy := range attachedPolicies {
+		_, err = i.Client.DetachRolePolicy(&iam.DetachRolePolicyInput{
 			PolicyArn: policy.PolicyArn,
 			RoleName:  &roleName,
 		})
 		if err != nil {
-			errors = append(errors, err)
+			return err
 		}
 	}
-	_, err = iamClient.DeleteRole(&iam.DeleteRoleInput{
+	_, err = i.Client.DeleteRole(&iam.DeleteRoleInput{
 		RoleName: &roleName,
 	})
-	if len(errors) > 0 {
-		return fmt.Errorf("Errors occurred while detaching policies: %v", errors)
-	}
 	return err
 }
 
 //SyncIAMRole synchronizes an AWS IAM Role to a spec
-func SyncIAMRole(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
+func (i *IAMClient) SyncIAMRole() error {
 	var errors []error
-	roleName := iamRole.ObjectMeta.GetName()
-	_, err := iamClient.UpdateRole(&iam.UpdateRoleInput{
-		Description:        &iamRole.Spec.Description,
-		MaxSessionDuration: &iamRole.Spec.MaxSessionDuration,
-		RoleName:           &roleName,
-	})
-	if err != nil {
-		return err
-	}
-	_, err = iamClient.UpdateAssumeRolePolicy(&iam.UpdateAssumeRolePolicyInput{
-		RoleName:       &roleName,
-		PolicyDocument: &iamRole.Spec.TrustRelationship,
-	})
-	err = removeInlinePolicies(iamClient, iamRole)
-	if err != nil {
-		return err
-	}
-	err = createInlinePolicies(iamClient, iamRole)
-	if err != nil {
-		return err
-	}
-	err = attachPolicies(iamClient, iamRole)
-	if err != nil {
-		errors = append(errors, err)
-	}
-	attachedPolicies, err := iamClient.ListAttachedRolePolicies(&iam.ListAttachedRolePoliciesInput{
+	roleName := i.Role.ObjectMeta.GetName()
+	getRoleOutput, err := i.Client.GetRole(&iam.GetRoleInput{
 		RoleName: &roleName,
 	})
 	if err != nil {
 		return err
 	}
-	for _, policy := range attachedPolicies.AttachedPolicies {
-		if !in(iamRole.Spec.Policies, *policy.PolicyArn) && !in(iamRole.Spec.Policies, *policy.PolicyName) {
-			_, err = iamClient.DetachRolePolicy(&iam.DetachRolePolicyInput{
+	awsRole := *getRoleOutput.Role
+	if *awsRole.Description != i.Role.Spec.Description {
+		_, err = i.Client.UpdateRoleDescription(&iam.UpdateRoleDescriptionInput{
+			Description: &i.Role.Spec.Description,
+			RoleName:    &roleName,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if *awsRole.MaxSessionDuration != i.Role.Spec.MaxSessionDuration {
+		_, err = i.Client.UpdateRole(&iam.UpdateRoleInput{
+			RoleName:           &roleName,
+			MaxSessionDuration: &i.Role.Spec.MaxSessionDuration,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if *awsRole.AssumeRolePolicyDocument != i.Role.Spec.TrustRelationship {
+		_, err = i.Client.UpdateAssumeRolePolicy(&iam.UpdateAssumeRolePolicyInput{
+			RoleName:       &roleName,
+			PolicyDocument: &i.Role.Spec.TrustRelationship,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	err = i.createInlinePolicies()
+	if err != nil {
+		return err
+	}
+	inlinePolicies, err := i.listInlinePolicies(roleName)
+	if err != nil {
+		return err
+	}
+	var requestedInlinePolicies []string
+	for _, p := range i.Role.Spec.InlinePolicy {
+		requestedInlinePolicies = append(requestedInlinePolicies, p.Name)
+	}
+	for _, policy := range inlinePolicies {
+		if !in(requestedInlinePolicies, policy) {
+			_, err = i.Client.DeleteRolePolicy(&iam.DeleteRolePolicyInput{
+				PolicyName: &policy,
+				RoleName:   &roleName,
+			})
+			if err != nil {
+				errors = append(errors, err)
+			}
+		}
+	}
+	err = i.attachPolicies()
+	if err != nil {
+		errors = append(errors, err)
+	}
+	attachedPolicies, err := i.listAttachedPolicies(roleName)
+	if err != nil {
+		return err
+	}
+	for _, policy := range attachedPolicies {
+		if !in(i.Role.Spec.Policies, *policy.PolicyArn) && !in(i.Role.Spec.Policies, *policy.PolicyName) {
+			_, err = i.Client.DetachRolePolicy(&iam.DetachRolePolicyInput{
 				PolicyArn: policy.PolicyArn,
 				RoleName:  &roleName,
 			})
@@ -117,25 +172,24 @@ func SyncIAMRole(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
 	return nil
 }
 
-// Checks to see if a named IAM Role exists in AWS
-// TODO: Enhance the logic
-func iamRoleExists(iamClient *iam.IAM, roleName string) bool {
-	_, err := iamClient.GetRole(&iam.GetRoleInput{
+// IAMRoleExists Checks to see if a named IAM Role exists in AWS
+func (i *IAMClient) IAMRoleExists(roleName string) bool {
+	_, err := i.Client.GetRole(&iam.GetRoleInput{
 		RoleName: &roleName,
 	})
 	return err == nil
 }
 
 // Attaches policies found in the spec to a named IAM role
-func attachPolicies(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
-	roleName := iamRole.ObjectMeta.GetName()
+func (i *IAMClient) attachPolicies() error {
+	roleName := i.Role.ObjectMeta.GetName()
 	var errors []error
-	for _, policy := range iamRole.Spec.Policies {
+	for _, policy := range i.Role.Spec.Policies {
 		policyArn, err := getArn(policy)
 		if err != nil {
 			return err
 		}
-		_, err = iamClient.AttachRolePolicy(&iam.AttachRolePolicyInput{
+		_, err = i.Client.AttachRolePolicy(&iam.AttachRolePolicyInput{
 			PolicyArn: &policyArn,
 			RoleName:  &roleName,
 		})
@@ -150,39 +204,14 @@ func attachPolicies(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
 }
 
 // Creates inline polices defined in a spec and attaches it to a role
-func createInlinePolicies(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
+func (i *IAMClient) createInlinePolicies() error {
 	var errors []error
-	roleName := iamRole.ObjectMeta.GetName()
-	for _, inlinePolicy := range iamRole.Spec.InlinePolicy {
-		_, err := iamClient.PutRolePolicy(&iam.PutRolePolicyInput{
+	roleName := i.Role.ObjectMeta.GetName()
+	for _, inlinePolicy := range i.Role.Spec.InlinePolicy {
+		_, err := i.Client.PutRolePolicy(&iam.PutRolePolicyInput{
 			PolicyDocument: &inlinePolicy.Value,
 			RoleName:       &roleName,
 			PolicyName:     &inlinePolicy.Name,
-		})
-		if err != nil {
-			errors = append(errors, err)
-		}
-	}
-	if len(errors) > 0 {
-		return fmt.Errorf("Errors occurred while attaching policies: %v", errors)
-	}
-	return nil
-}
-
-// Removes inline policies from a role
-func removeInlinePolicies(iamClient *iam.IAM, iamRole *iamv1beta1.IAMRole) error {
-	var errors []error
-	roleName := iamRole.ObjectMeta.GetName()
-	currentPolicies, err := iamClient.ListRolePolicies(&iam.ListRolePoliciesInput{
-		RoleName: &roleName,
-	})
-	if err != nil {
-		return err
-	}
-	for _, policy := range currentPolicies.PolicyNames {
-		_, err = iamClient.DeleteRolePolicy(&iam.DeleteRolePolicyInput{
-			PolicyName: policy,
-			RoleName:   &roleName,
 		})
 		if err != nil {
 			errors = append(errors, err)
@@ -208,7 +237,54 @@ func getArn(policyName string) (string, error) {
 }
 
 // Returns if a policy string is an ARN
-// TODO: Enhance the logic
 func isArn(policy string) bool {
 	return strings.Contains(policy, "arn:aws:iam")
+}
+
+// Paginate over inline policies
+func (i *IAMClient) listInlinePolicies(roleName string) ([]string, error) {
+	var policyNamesPointers []*string
+	isTruncated := true
+	marker := "1"
+	for isTruncated {
+		currentPolicies, err := i.Client.ListRolePolicies(&iam.ListRolePoliciesInput{
+			RoleName: &roleName,
+			Marker:   &marker,
+		})
+		if err != nil {
+			return nil, err
+		}
+		policyNamesPointers = append(policyNamesPointers, currentPolicies.PolicyNames...)
+		marker = *currentPolicies.Marker
+		isTruncated = *currentPolicies.IsTruncated
+	}
+	var policyNameValues []string
+	for _, val := range policyNamesPointers {
+		policyNameValues = append(policyNameValues, *val)
+	}
+	return policyNameValues, nil
+}
+
+// Paginate over attached policies
+func (i *IAMClient) listAttachedPolicies(roleName string) ([]iam.AttachedPolicy, error) {
+	var policyPointers []*iam.AttachedPolicy
+	isTruncated := true
+	marker := "1"
+	for isTruncated {
+		currentPolicies, err := i.Client.ListAttachedRolePolicies(&iam.ListAttachedRolePoliciesInput{
+			RoleName: &roleName,
+			Marker:   &marker,
+		})
+		if err != nil {
+			return nil, err
+		}
+		policyPointers = append(policyPointers, currentPolicies.AttachedPolicies...)
+		marker = *currentPolicies.Marker
+		isTruncated = *currentPolicies.IsTruncated
+	}
+	var policyNameValues []iam.AttachedPolicy
+	for _, val := range policyPointers {
+		policyNameValues = append(policyNameValues, *val)
+	}
+	return policyNameValues, nil
 }

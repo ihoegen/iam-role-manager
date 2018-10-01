@@ -81,21 +81,25 @@ type ReconcileIAMRole struct {
 func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	// Fetch the IAMRole instance
 	iamRole := &iamv1beta1.IAMRole{}
-	iamClient := iam.New(session.New())
+	client := iam.New(session.New())
+	iamClient := NewIAMClient(client, iamRole)
 	err := r.Get(context.TODO(), request.NamespacedName, iamRole)
 	if err != nil {
 		// IAM role deleted
 		if errors.IsNotFound(err) {
 			iamRole.ObjectMeta.SetName(request.Name)
-			err = DeleteIAMRole(iamClient, iamRole)
+			err = iamClient.DeleteIAMRole()
+			if err != nil {
+				log.Println("Error deleting IAM Role", request.Name, ":", err)
+			}
 			return reconcile.Result{}, err
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
 	}
 	// IAM Role exists in AWS; updating
-	if iamRoleExists(iamClient, iamRole.ObjectMeta.GetName()) {
-		err = SyncIAMRole(iamClient, iamRole)
+	if iamClient.IAMRoleExists(iamRole.ObjectMeta.GetName()) {
+		err = iamClient.SyncIAMRole()
 		if err != nil {
 			eventRecorder.Event(iamRole, "Warning", "ErrorSyncingIAMRole", err.Error())
 			return reconcile.Result{}, err
@@ -104,7 +108,7 @@ func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Resul
 		return reconcile.Result{}, nil
 	}
 	// IAM Role doesn't exist in AWS; creating
-	err = CreateIAMRole(iamClient, iamRole)
+	err = iamClient.CreateIAMRole()
 	if err != nil {
 		eventRecorder.Event(iamRole, "Warning", "ErrorCreatingIAMRole", err.Error())
 		return reconcile.Result{}, err
