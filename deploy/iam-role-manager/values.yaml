@@ -4,6 +4,7 @@ image:
   repository: ihoegen/iam-role-manager
   tag: latest
   pullPolicy: Always
+# pullSecret: some-secret  
 
 rbac:
   create: true
