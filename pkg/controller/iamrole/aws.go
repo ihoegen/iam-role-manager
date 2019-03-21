@@ -2,6 +2,7 @@ package iamrole
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -35,17 +36,21 @@ func (i *IAMClient) CreateIAMRole() error {
 		RoleName:                 &roleName,
 		MaxSessionDuration:       &i.Role.Spec.MaxSessionDuration,
 	})
+	log.Printf("Created role: %+v\n", createRoleOutput)
 	if err != nil {
+		log.Printf("Error creating role: %+v\n", err)
 		return err
 	}
 	i.Role.Status.ARN = *createRoleOutput.Role.Arn
 	i.Role.Status.RoleID = *createRoleOutput.Role.RoleId
 	err = i.createInlinePolicies()
 	if err != nil {
+		log.Printf("Error creating inline policies: %+v\n", err)
 		return err
 	}
 	err = i.attachPolicies()
 	if err != nil {
+		log.Printf("Error attaching policies: %+v\n", err)
 		return err
 	}
 	return nil
@@ -56,6 +61,7 @@ func (i *IAMClient) DeleteIAMRole() error {
 	roleName := i.Role.ObjectMeta.GetName()
 	currentPolicies, err := i.listInlinePolicies(roleName)
 	if err != nil {
+		log.Printf("Error listing inline policies: %+v\n", err)
 		return err
 	}
 	for _, policy := range currentPolicies {
@@ -64,11 +70,13 @@ func (i *IAMClient) DeleteIAMRole() error {
 			RoleName:   &roleName,
 		})
 		if err != nil {
+			log.Printf("Error deleting role policy: %+v\n", err)
 			return err
 		}
 	}
 	attachedPolicies, err := i.listAttachedPolicies(roleName)
 	if err != nil {
+		log.Printf("Error listing attached policies: %+v\n", err)
 		return err
 	}
 	for _, policy := range attachedPolicies {
@@ -77,12 +85,16 @@ func (i *IAMClient) DeleteIAMRole() error {
 			RoleName:  &roleName,
 		})
 		if err != nil {
+			log.Printf("Error detaching policies: %+v\n", err)
 			return err
 		}
 	}
 	_, err = i.Client.DeleteRole(&iam.DeleteRoleInput{
 		RoleName: &roleName,
 	})
+	if err != nil {
+		log.Printf("Error deleting role: %+v\n", err)
+	}
 	return err
 }
 
@@ -241,23 +253,53 @@ func isArn(policy string) bool {
 	return strings.Contains(policy, "arn:aws:iam")
 }
 
+func (i *IAMClient) innerListInlinePolicies(roleName, m string) (policies []*string, isTruncated bool, marker string, err error) {
+	var input *iam.ListRolePoliciesInput
+	if m != "" {
+		input = &iam.ListRolePoliciesInput{
+			RoleName: &roleName,
+			Marker:   &m,
+		}
+	} else {
+		input = &iam.ListRolePoliciesInput{
+			RoleName: &roleName,
+		}
+	}
+	currentPolicies, err := i.Client.ListRolePolicies(input)
+	if err != nil {
+		return nil, false, "", err
+	}
+	isTruncated = *currentPolicies.IsTruncated
+	if isTruncated {
+		marker = *currentPolicies.Marker
+	}
+	return currentPolicies.PolicyNames, isTruncated, marker, nil
+}
+
 // Paginate over inline policies
 func (i *IAMClient) listInlinePolicies(roleName string) ([]string, error) {
 	var policyNamesPointers []*string
-	isTruncated := true
-	marker := "1"
+	var policies []*string
+	var isTruncated bool
+	var marker string
+	var err error
+	// First pass through will tell us if there are more policies we need to fetch.
+	// If we don't do it this way, we will get a "ValidationError: Invalid Marker"
+	// See https://docs.aws.amazon.com/sdk-for-go/api/service/iam/#ListRolePoliciesInput
+	policies, isTruncated, marker, err = i.innerListInlinePolicies(roleName, "")
+	if err != nil {
+		return nil, err
+	}
+	policyNamesPointers = append(policyNamesPointers, policies...)
+
 	for isTruncated {
-		currentPolicies, err := i.Client.ListRolePolicies(&iam.ListRolePoliciesInput{
-			RoleName: &roleName,
-			Marker:   &marker,
-		})
+		policies, isTruncated, marker, err = i.innerListInlinePolicies(roleName, marker)
 		if err != nil {
 			return nil, err
 		}
-		policyNamesPointers = append(policyNamesPointers, currentPolicies.PolicyNames...)
-		marker = *currentPolicies.Marker
-		isTruncated = *currentPolicies.IsTruncated
+		policyNamesPointers = append(policyNamesPointers, policies...)
 	}
+
 	var policyNameValues []string
 	for _, val := range policyNamesPointers {
 		policyNameValues = append(policyNameValues, *val)
@@ -265,22 +307,52 @@ func (i *IAMClient) listInlinePolicies(roleName string) ([]string, error) {
 	return policyNameValues, nil
 }
 
+func (i *IAMClient) innerListAttachedPolicies(roleName, m string) (policies []*iam.AttachedPolicy, isTruncated bool, marker string, err error) {
+	var input *iam.ListAttachedRolePoliciesInput
+	if m != "" {
+		input = &iam.ListAttachedRolePoliciesInput{
+			RoleName: &roleName,
+			Marker:   &m,
+		}
+	} else {
+		input = &iam.ListAttachedRolePoliciesInput{
+			RoleName: &roleName,
+		}
+	}
+	currentPolicies, err := i.Client.ListAttachedRolePolicies(input)
+	if err != nil {
+		return nil, false, "", err
+	}
+	isTruncated = *currentPolicies.IsTruncated
+	if isTruncated {
+		marker = *currentPolicies.Marker
+	}
+	return currentPolicies.AttachedPolicies, isTruncated, marker, nil
+}
+
 // Paginate over attached policies
 func (i *IAMClient) listAttachedPolicies(roleName string) ([]iam.AttachedPolicy, error) {
 	var policyPointers []*iam.AttachedPolicy
-	isTruncated := true
-	marker := "1"
+	var policies []*iam.AttachedPolicy
+	var isTruncated bool
+	var marker string
+	var err error
+
+	// First pass through will tell us if there are more policies we need to fetch.
+	// If we don't do it this way, we will get a "ValidationError: Invalid Marker"
+	// See https://docs.aws.amazon.com/sdk-for-go/api/service/iam/#ListRolePoliciesInput
+	policies, isTruncated, marker, err = i.innerListAttachedPolicies(roleName, "")
+	if err != nil {
+		return nil, err
+	}
+	policyPointers = append(policyPointers, policies...)
+
 	for isTruncated {
-		currentPolicies, err := i.Client.ListAttachedRolePolicies(&iam.ListAttachedRolePoliciesInput{
-			RoleName: &roleName,
-			Marker:   &marker,
-		})
+		policies, isTruncated, marker, err = i.innerListAttachedPolicies(roleName, marker)
 		if err != nil {
 			return nil, err
 		}
-		policyPointers = append(policyPointers, currentPolicies.AttachedPolicies...)
-		marker = *currentPolicies.Marker
-		isTruncated = *currentPolicies.IsTruncated
+		policyPointers = append(policyPointers, policies...)
 	}
 	var policyNameValues []iam.AttachedPolicy
 	for _, val := range policyPointers {
