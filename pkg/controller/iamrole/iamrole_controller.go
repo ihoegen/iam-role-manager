@@ -79,6 +79,7 @@ type ReconcileIAMRole struct {
 // +kubebuilder:rbac:groups=iam.amazonaws.com,resources=iamroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+	log.Println("Reconciling")
 	// Fetch the IAMRole instance
 	iamRole := &iamv1beta1.IAMRole{}
 	client := iam.New(session.New())
@@ -86,6 +87,7 @@ func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Resul
 	err := r.Get(context.TODO(), request.NamespacedName, iamRole)
 	if err != nil {
 		// IAM role deleted
+		log.Println("Removing IAM Role: ", request.Name)
 		if errors.IsNotFound(err) {
 			iamRole.ObjectMeta.SetName(request.Name)
 			err = iamClient.DeleteIAMRole()
@@ -99,6 +101,7 @@ func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Resul
 	}
 	// IAM Role exists in AWS; updating
 	if iamClient.IAMRoleExists(iamRole.ObjectMeta.GetName()) {
+		log.Println("Updating IAM Role: ", request.Name)
 		err = iamClient.SyncIAMRole()
 		if err != nil {
 			eventRecorder.Event(iamRole, "Warning", "ErrorSyncingIAMRole", err.Error())
@@ -108,6 +111,7 @@ func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Resul
 		return reconcile.Result{}, nil
 	}
 	// IAM Role doesn't exist in AWS; creating
+	log.Println("Creating IAM Role: ", request.Name)
 	err = iamClient.CreateIAMRole()
 	if err != nil {
 		eventRecorder.Event(iamRole, "Warning", "ErrorCreatingIAMRole", err.Error())
@@ -116,5 +120,4 @@ func (r *ReconcileIAMRole) Reconcile(request reconcile.Request) (reconcile.Resul
 	err = r.Update(context.TODO(), iamRole)
 	eventRecorder.Event(iamRole, "Normal", "IAMRoleCreated", "Successfully created IAM role")
 	return reconcile.Result{}, err
-
 }

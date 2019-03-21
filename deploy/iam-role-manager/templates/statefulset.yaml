@@ -21,15 +21,31 @@ spec:
         iam.amazonaws.com/role: {{ .Values.iamRole }}
       {{- end}}
     spec:
+    {{- if .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.image.pullSecret }}
+    {{- end }}
     {{- if .Values.rbac.create }}
       serviceAccountName: {{ template "iam-role-manager.fullname" . }}
     {{- end }}
+    {{- if and .Values.ssl.hostPath .Values.ssl.mountPath }}
+      volumes:
+        - name: ssl-certs
+          hostPath:
+            path: {{ .Values.ssl.hostPath }}
+    {{- end}}
       containers:
       - command:
         - /root/manager
         image: '{{ .Values.image.repository }}:{{ .Values.image.tag }}'
-        imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
         name: {{ template "iam-role-manager.fullname" . }}
+      {{- if and .Values.ssl.hostPath .Values.ssl.mountPath }}
+        volumeMounts:
+          - name: ssl-certs
+            mountPath: {{ .Values.ssl.mountPath }}
+            readOnly: true
+      {{- end}}
         resources:
           limits:
             cpu: 100m
